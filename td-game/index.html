@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Canvas Tower Defense</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="topbar">
+      <div class="stat"><strong>Lives:</strong> <span id="lives">20</span></div>
+      <div class="stat"><strong>Gold:</strong> <span id="gold">150</span></div>
+      <div class="stat"><strong>Wave:</strong> <span id="wave">0</span></div>
+      <button id="startWaveBtn">Start Wave</button>
+    </div>
+
+    <div id="main">
+      <div id="sidebar">
+        <h3>Towers</h3>
+        <button class="tower-btn" data-type="basic">Basic (Cost 50)</button>
+        <button class="tower-btn" data-type="sniper">Sniper (Cost 70)</button>
+        <button class="tower-btn" data-type="splash">Splash (Cost 90)</button>
+        <div class="hint">Click a tower button, then click on the map to place. Avoid the path.</div>
+        <div id="message"></div>
+      </div>
+      <div id="canvasWrap">
+        <canvas id="game" width="900" height="600"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script src="src/game.js"></script>
+</body>
+</html>

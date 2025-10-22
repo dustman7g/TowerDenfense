@@ -1,0 +1,20 @@
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0f1220; color:#e7e9ee; }
+#app { max-width: 1200px; margin: 0 auto; padding: 12px; }
+#topbar { display:flex; align-items:center; gap:16px; padding:10px 12px; background:#171a2b; border:1px solid #29304f; border-radius:10px; position:sticky; top:0; z-index:10; }
+#topbar .stat { padding:6px 10px; background:#0e1327; border:1px solid #2a3154; border-radius:8px; }
+#topbar button { margin-left:auto; padding:8px 12px; background:#2a8cff; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:600; }
+#topbar button:hover { filter:brightness(1.1); }
+
+#main { display:flex; gap:12px; margin-top:12px; }
+#sidebar { width:260px; padding:12px; background:#171a2b; border:1px solid #29304f; border-radius:10px; }
+#sidebar h3 { margin:6px 0 10px; }
+.tower-btn { width:100%; margin-bottom:8px; padding:10px; background:#24305a; color:#dfe7ff; border:1px solid #354174; border-radius:8px; cursor:pointer; text-align:left; }
+.tower-btn:hover { background:#2a376b; }
+.hint { margin-top:8px; color:#b9c1da; font-size:0.9em; }
+#message { margin-top:10px; min-height:22px; color:#ffd36e; font-weight:600; }
+
+#canvasWrap { flex:1; padding:8px; background:#0b0e1b; border:1px solid #29304f; border-radius:10px; display:flex; align-items:center; justify-content:center; }
+#game { background:#0a0f1e; width:900px; height:600px; border-radius:8px; box-shadow: inset 0 0 0 2px #1c2442; image-rendering: pixelated; }
+
+.badge { display:inline-block; padding:2px 6px; border-radius:6px; background:#23305a; border:1px solid #3a4a86; font-size:12px; }
