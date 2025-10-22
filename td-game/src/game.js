@@ -136,14 +136,26 @@
       cost: 90,
       range: 120,
       rof: 1.2,
-      dmg: 8,
-      splash: 50,
+      dmg: 14,
+      splash: 80,
       bulletSpeed: 320,
       color: '#b084ff',
       bulletColor: '#d4b8ff',
       auraColor: 'rgba(176, 132, 255, 0.1)',
       shootEffect: 'orb',
       size: 16
+    },
+    machinegun: {
+      cost: 80,
+      range: 100,
+      rof: 0.15, // fires very fast
+      dmg: 3,
+      bulletSpeed: 560,
+      color: '#7cffb2',
+      bulletColor: '#7cffb2',
+      auraColor: 'rgba(124, 255, 178, 0.08)',
+      shootEffect: 'tracer',
+      size: 12
     },
   };
 
@@ -437,9 +449,15 @@
             vx: Math.cos(angle) * def.bulletSpeed,
             vy: Math.sin(angle) * def.bulletSpeed,
             dmg: def.dmg,
-            color: def.color,
+            color: def.bulletColor || def.color,
             splash: def.splash || 0,
-            life: 2,
+            life: def.shootEffect === 'beam' ? 0.12 : 1.2,
+            maxLife: def.shootEffect === 'beam' ? 0.12 : 1.2,
+            type: t.type,
+            effect: def.shootEffect,
+            // Beam/projectile endpoint snapshot for beam rendering
+            tx: target.x,
+            ty: target.y,
           });
         }
       }
@@ -1032,9 +1050,12 @@
       
       if (p.effect === 'beam') {
         // Laser beam effect
-        const dx = p.tx - p.x;
-        const dy = p.ty - p.y;
+        const dx = (p.tx ?? p.x) - p.x;
+        const dy = (p.ty ?? p.y) - p.y;
         const length = Math.hypot(dx, dy);
+        if (!isFinite(length) || length <= 0) {
+          continue; // skip invalid beam
+        }
         const angle = Math.atan2(dy, dx);
         
         ctx.save();
