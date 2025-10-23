@@ -426,11 +426,13 @@
       }
     }
 
-    // Insert a special tank enemy in wave 5
-    if (state.wave === 5) {
-      // Put the tank near the middle of the wave
-      const mid = Math.floor(state.upcoming.length / 2);
-      state.upcoming.splice(mid, 0, makeTankEnemy());
+    // Tanks: start at wave 5, then +1 tank every 5 waves (5,10,15,...)
+    if (state.wave >= 5) {
+      const tankCount = 1 + Math.floor((state.wave - 5) / 5);
+      for (let tnk = 0; tnk < tankCount; tnk++) {
+        const idx = Math.floor(((tnk + 1) / (tankCount + 1)) * state.upcoming.length);
+        state.upcoming.splice(idx, 0, makeTankEnemy());
+      }
     }
 
     state.waveSpawning = true;
