@@ -17,6 +17,18 @@
     });
   }
 
+  // Targeting rules: which towers can hit which enemies
+  function canTowerHit(towerType, enemy) {
+    if (enemy.type === 'jet') {
+      return towerType === 'basic' || towerType === 'sniper' || towerType === 'missile';
+    }
+    return true; // others are ground and can be hit by all current towers
+  }
+
+  function canProjectileHit(p, enemy) {
+    return canTowerHit(p.type, enemy);
+  }
+
   function updateParticles(dt) {
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
@@ -190,6 +202,19 @@
       shootEffect: 'missile',
       size: 14
     },
+    wizard: {
+      cost: 110,
+      range: 160,
+      rof: 1.0,
+      dmg: 16,               // base damage on first target
+      bulletSpeed: 0,
+      color: '#9b84ff',
+      bulletColor: '#9be7ff',
+      auraColor: 'rgba(155, 132, 255, 0.12)',
+      shootEffect: 'chain',
+      size: 14,
+      chain: { bounces: 3, bounceRange: 160, falloff: 0.7 }
+    },
   };
 
   // Enemy presets per wave escalation
@@ -219,6 +244,22 @@
       reachedEnd: false,
       reward: 6,
       type: 'fast',
+    };
+  }
+
+  // Air unit: fighter jet (used by startWave)
+  function makeJetEnemy(hpMul = 1, spdMul = 1) {
+    return {
+      x: PATH_POINTS[0].x * TILE + TILE * 0.5,
+      y: PATH_POINTS[0].y * TILE + TILE * 0.5,
+      r: 9,
+      speed: 150 * spdMul,
+      hp: Math.floor(35 * hpMul),
+      maxHp: Math.floor(35 * hpMul),
+      pathIndex: 1,
+      reachedEnd: false,
+      reward: 10,
+      type: 'jet',
     };
   }
 
@@ -364,13 +405,25 @@
     const hpMul = 1 + state.wave * 0.25;
     const spdMul = 1 + state.wave * 0.05;
 
-    const count = 8 + Math.floor(state.wave * 1.5);
+    // Linear progression: +1 enemy per wave (Wave 1 = 8, Wave 2 = 9, ...)
+    const count = 8 + (state.wave - 1);
     state.upcoming = Array.from({ length: count }, () => makeEnemy(hpMul, spdMul));
-    // Add some fast runners to spice up the wave
-    const fastCount = Math.max(1, Math.floor(count * 0.2));
-    for (let i = 0; i < fastCount; i++) {
-      const idx = Math.floor(((i + 1) / (fastCount + 1)) * state.upcoming.length);
-      state.upcoming.splice(idx, 0, makeFastEnemy(hpMul, spdMul * 1.05));
+    // Add fast runners starting from wave 3
+    if (state.wave >= 3) {
+      const fastCount = Math.max(1, Math.floor(count * 0.2));
+      for (let i = 0; i < fastCount; i++) {
+        const idx = Math.floor(((i + 1) / (fastCount + 1)) * state.upcoming.length);
+        state.upcoming.splice(idx, 0, makeFastEnemy(hpMul, spdMul * 1.05));
+      }
+    }
+
+    // Add fighter jets starting from wave 10
+    if (state.wave >= 10) {
+      const jetCount = Math.max(1, Math.floor(count * 0.15));
+      for (let j = 0; j < jetCount; j++) {
+        const idx = Math.floor(((j + 1) / (jetCount + 1)) * state.upcoming.length);
+        state.upcoming.splice(idx, 0, makeJetEnemy(hpMul, spdMul * 1.1));
+      }
     }
 
     // Insert a special tank enemy in wave 5
@@ -437,6 +490,15 @@
       (G > 0 ? G : 0) * 0x100 +
       (B > 0 ? B : 0)
     ).toString(16).slice(1);
+  }
+  
+  function hexToRgba(hex, alpha = 1) {
+    const h = hex.replace('#', '');
+    const bigint = parseInt(h, 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return `rgba(${r},${g},${b},${alpha})`;
   }
   
   function roundRect(ctx, x, y, width, height, radius) {
@@ -551,6 +613,71 @@
               600 // gravity to drop down quickly
             );
           }
+          // Wizard chain lightning: instant chain damage + visual
+          if (t.type === 'wizard') {
+            const chainCfg = TowerTypes.wizard.chain;
+            const points = [{ x: t.x, y: t.y }];
+            const hitSet = new Set();
+            let current = target;
+            let bounces = chainCfg.bounces;
+            let mult = 1.0;
+            while (current && bounces >= 0) {
+              points.push({ x: current.x, y: current.y });
+              const key = current.x + ':' + current.y;
+              hitSet.add(key);
+              const dmg = def.dmg * mult;
+              current.hp -= dmg;
+              current.damageTime = state.time;
+              // find next nearest within bounce range
+              let next = null; let bestD = Infinity;
+              for (const e2 of state.enemies) {
+                if (e2 === current) continue;
+                const k2 = e2.x + ':' + e2.y;
+                const d2 = dist(current, e2);
+                if (d2 <= chainCfg.bounceRange && d2 < bestD && !hitSet.has(k2)) {
+                  bestD = d2; next = e2;
+                }
+              }
+              current = next; bounces--; mult *= chainCfg.falloff;
+            }
+            // store effect projectile to render the chain briefly
+            state.projectiles.push({
+              x: t.x, y: t.y,
+              vx: 0, vy: 0,
+              dmg: 0,
+              color: def.bulletColor,
+              splash: 0,
+              life: 0.12,
+              maxLife: 0.12,
+              type: t.type,
+              effect: 'chain',
+              path: points
+            });
+            // skip normal projectile creation
+            continue;
+          }
+
+          // If this is a beam-style tower, apply damage instantly (visual stays briefly)
+          if (def.shootEffect === 'beam') {
+            target.hp -= def.dmg;
+            target.damageTime = state.time;
+          }
+          // Missile launcher visuals: recoil + smoke burst
+          if (t.type === 'missile') {
+            t.recoil = 1.0; // trigger recoil animation
+            for (let s = 0; s < 6; s++) {
+              createParticle(
+                t.x + Math.cos(angle) * (TowerTypes.missile.size * 1.2),
+                t.y + Math.sin(angle) * (TowerTypes.missile.size * 1.2),
+                'rgba(200,200,200,0.6)',
+                2 + Math.random() * 2,
+                40 + Math.random() * 40,
+                0.4 + Math.random() * 0.3,
+                0
+              );
+            }
+          }
+          
           state.projectiles.push({
             x: t.x, y: t.y,
             vx: Math.cos(angle) * def.bulletSpeed,
@@ -569,6 +696,11 @@
           });
         }
       }
+    }
+
+    // Decay tower recoil
+    for (const t of state.towers) {
+      if (t.recoil && t.recoil > 0) t.recoil = Math.max(0, t.recoil - dt * 3);
     }
 
     // Projectiles
@@ -1172,6 +1304,69 @@
           ctx.restore();
         }
         ctx.restore();
+      } else if (t.type === 'missile') {
+        // Missile launcher tower: chassis + dual tubes + radar dish + recoil
+        const aim = (t.lastAngle ?? 0);
+        const recoil = (t.recoil || 0);
+
+        // Shadow
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.ellipse(0, 8, def.size * 0.9, def.size * 0.35, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Chassis body
+        const bodyGrad = ctx.createLinearGradient(-def.size, -def.size, def.size, def.size);
+        bodyGrad.addColorStop(0, lightenColor(def.color, 25));
+        bodyGrad.addColorStop(1, def.color);
+        ctx.fillStyle = bodyGrad;
+        ctx.strokeStyle = lightenColor(def.color, 15);
+        ctx.lineWidth = 2;
+        roundRect(ctx, -def.size*0.9, -def.size*0.6, def.size*1.8, def.size*1.2, 6);
+        ctx.fill();
+        ctx.stroke();
+
+        // Radar dish on top (rotating)
+        ctx.save();
+        ctx.translate(-def.size*0.6, -def.size*0.7);
+        ctx.rotate(state.time * 2.2);
+        ctx.fillStyle = '#c9d6ff';
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size*0.35, 0, Math.PI*2);
+        ctx.fill();
+        ctx.strokeStyle = '#91a6ff';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(def.size*0.45, 0);
+        ctx.stroke();
+        ctx.restore();
+
+        // Launch tubes assembly with recoil offset in aim direction
+        ctx.save();
+        ctx.rotate(aim);
+        const offset = recoil * 6; // pixels back on fire
+        ctx.translate(-offset, 0);
+        ctx.fillStyle = '#adb7c7';
+        ctx.strokeStyle = '#6f7b8f';
+        ctx.lineWidth = 1.5;
+        // Left tube
+        roundRect(ctx, -2, -def.size*0.45, def.size*1.6, def.size*0.28, 4); ctx.fill(); ctx.stroke();
+        // Right tube
+        roundRect(ctx, -2,  def.size*0.17, def.size*1.6, def.size*0.28, 4); ctx.fill(); ctx.stroke();
+        // Tube rims
+        ctx.fillStyle = '#dfe6f5';
+        ctx.beginPath(); ctx.arc(def.size*1.6, -def.size*0.31, def.size*0.14, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(def.size*1.6,  def.size*0.31, def.size*0.14, 0, Math.PI*2); ctx.fill();
+        ctx.restore();
+
+        // Small status LED
+        ctx.fillStyle = recoil > 0 ? '#ffb86b' : '#86ff86';
+        ctx.beginPath();
+        ctx.arc(def.size*0.6, -def.size*0.2, 2, 0, Math.PI*2);
+        ctx.fill();
       }
       
       // Highlight when selected
@@ -1195,72 +1390,175 @@
       
       ctx.save();
       ctx.translate(e.x, e.y);
+      const rot = e.rotation || 0;
       
       // Shadow
       ctx.save();
       ctx.fillStyle = 'rgba(0,0,0,0.3)';
       ctx.beginPath();
-      ctx.ellipse(0, e.r * 0.5, e.r * 0.8, e.r * 0.3, 0, 0, Math.PI * 2);
+      const shY = e.type === 'jet' ? e.r * 0.9 : e.r * 0.6;
+      const shRX = e.type === 'jet' ? e.r * 1.2 : e.r * 0.9;
+      const shRY = e.type === 'jet' ? e.r * 0.4 : e.r * 0.35;
+      ctx.ellipse(0, shY, shRX, shRY, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
-      
-      // Enemy body
-      const gradient = ctx.createRadialGradient(
-        0, -e.r/2, 0,
-        0, 0, e.r
-      );
-      // Differentiate special enemy types
+
+      // Colors per type
       let baseColor = isDamaged ? '#ff4a4a' : '#ff6e6e';
       if (e.type === 'fast') baseColor = isDamaged ? '#5ad4ff' : '#6ee7ff';
       if (e.type === 'tank') baseColor = isDamaged ? '#ff9b4a' : '#ffb36e';
-      gradient.addColorStop(0, lightenColor(baseColor, 30));
-      gradient.addColorStop(1, darkenColor(baseColor, 20));
-      
-      ctx.fillStyle = gradient;
-      ctx.strokeStyle = darkenColor(baseColor, 40);
-      ctx.lineWidth = 2;
-      
-      // Draw enemy shape (slightly rounded square)
-      const size = e.r * 1.4;
-      const cornerRadius = e.r * 0.3;
-      roundRect(ctx, -size/2, -size/2, size, size, cornerRadius);
-      ctx.fill();
-      ctx.stroke();
-      
-      // Eye
-      ctx.fillStyle = '#fff';
-      ctx.beginPath();
-      ctx.arc(size * 0.2, -size * 0.1, e.r * 0.25, 0, Math.PI * 2);
-      ctx.fill();
-      
+
+      if (e.type === 'tank') {
+        // Tank: tracks + body + turret
+        ctx.save();
+        ctx.rotate(rot);
+        // Tracks
+        ctx.fillStyle = '#2a2a2a';
+        ctx.strokeStyle = '#111';
+        ctx.lineWidth = 1;
+        roundRect(ctx, -e.r, -e.r*0.9, e.r*2, e.r*0.5, 3); ctx.fill(); ctx.stroke();
+        roundRect(ctx, -e.r,  e.r*0.4,  e.r*2, e.r*0.5, 3); ctx.fill(); ctx.stroke();
+        // Body
+        const bodyGrad = ctx.createLinearGradient(-e.r, 0, e.r, 0);
+        bodyGrad.addColorStop(0, lightenColor(baseColor, 25));
+        bodyGrad.addColorStop(1, darkenColor(baseColor, 10));
+        ctx.fillStyle = bodyGrad;
+        ctx.strokeStyle = darkenColor(baseColor, 35);
+        roundRect(ctx, -e.r*0.9, -e.r*0.7, e.r*1.8, e.r*1.4, 6);
+        ctx.fill(); ctx.stroke();
+        // Turret
+        ctx.fillStyle = lightenColor(baseColor, 30);
+        ctx.beginPath(); ctx.arc(0, 0, e.r*0.6, 0, Math.PI*2); ctx.fill();
+        // Barrel
+        ctx.fillStyle = '#444';
+        roundRect(ctx, e.r*0.2, -e.r*0.15, e.r*1.2, e.r*0.3, 2); ctx.fill();
+        ctx.restore();
+      } else if (e.type === 'fast') {
+        // Fast: sleek capsule with motion streaks
+        ctx.save();
+        ctx.rotate(rot);
+        const g = ctx.createLinearGradient(-e.r*1.6, 0, e.r*1.6, 0);
+        g.addColorStop(0, 'rgba(255,255,255,0.2)');
+        g.addColorStop(1, baseColor);
+        ctx.fillStyle = g;
+        ctx.strokeStyle = darkenColor(baseColor, 40);
+        ctx.lineWidth = 1.5;
+        roundRect(ctx, -e.r*1.2, -e.r*0.6, e.r*2.4, e.r*1.2, e.r*0.6);
+        ctx.fill(); ctx.stroke();
+        // Streaks
+        ctx.globalAlpha = 0.35;
+        ctx.strokeStyle = baseColor;
+        ctx.beginPath(); ctx.moveTo(-e.r*1.6, -1); ctx.lineTo(-e.r*0.2, -1); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-e.r*1.6, 1);  ctx.lineTo(-e.r*0.2, 1);  ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.restore();
+      } else if (e.type === 'jet') {
+        // Fighter jet: delta wing + cockpit + contrail
+        ctx.save();
+        ctx.rotate(rot);
+        // Body
+        const bodyGrad = ctx.createLinearGradient(-e.r, 0, e.r, 0);
+        bodyGrad.addColorStop(0, '#bcd1ff');
+        bodyGrad.addColorStop(1, '#7fa6ff');
+        ctx.fillStyle = bodyGrad;
+        ctx.strokeStyle = '#4f69a6';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(e.r * 1.4, 0);
+        ctx.lineTo(-e.r * 1.3, -e.r * 0.9);
+        ctx.lineTo(-e.r * 0.7, 0);
+        ctx.lineTo(-e.r * 1.3, e.r * 0.9);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+        // Cockpit
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        ctx.beginPath(); ctx.arc(e.r * 0.4, 0, e.r * 0.35, 0, Math.PI * 2); ctx.fill();
+        // Tail fins
+        ctx.fillStyle = '#9bb8ff';
+        roundRect(ctx, -e.r * 1.2, -e.r * 0.15, e.r * 0.5, e.r * 0.3, 2); ctx.fill();
+        ctx.restore();
+        
+        // Contrail particles
+        if (Math.random() < 0.4) {
+          createParticle(e.x - Math.cos(rot) * e.r * 1.4, e.y - Math.sin(rot) * e.r * 1.4, 'rgba(255,255,255,0.35)', 2, 18, 0.35, 0);
+        }
+      } else {
+        // Default enemy: layered shell + pulsing core + specular + fins + halo
+        ctx.save();
+        ctx.rotate(rot * 0.1); // slight wobble
+        const size = e.r * 1.6;
+        const cornerRadius = e.r * 0.35;
+
+        // Outer shell
+        const shell = ctx.createLinearGradient(-size/2, -size/2, size/2, size/2);
+        shell.addColorStop(0, lightenColor(baseColor, 18));
+        shell.addColorStop(1, darkenColor(baseColor, 22));
+        ctx.fillStyle = shell;
+        ctx.strokeStyle = darkenColor(baseColor, 40);
+        ctx.lineWidth = 2;
+        roundRect(ctx, -size/2, -size/2, size, size, cornerRadius);
+        ctx.fill(); ctx.stroke();
+
+        // Specular highlight arc
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(-size*0.15, -size*0.15, size*0.55, -Math.PI*0.15, Math.PI*0.35);
+        ctx.stroke();
+        ctx.restore();
+
+        // Side fins
+        ctx.fillStyle = lightenColor(baseColor, 28);
+        roundRect(ctx, -size*0.65, -e.r*0.35, e.r*0.45, e.r*0.7, 3); ctx.fill();
+        roundRect(ctx,  size*0.20, -e.r*0.35, e.r*0.45, e.r*0.7, 3); ctx.fill();
+
+        // Pulsing inner core
+        const pulse = 0.85 + 0.15 * (1 + Math.sin(state.time * 3 + e.x * 0.01 + e.y * 0.01)) * 0.5;
+        const coreR = e.r * 0.55 * pulse;
+        const core = ctx.createRadialGradient(0, 0, 0, 0, 0, coreR);
+        core.addColorStop(0, 'rgba(255,255,255,0.85)');
+        core.addColorStop(1, hexToRgba(lightenColor(baseColor, 10), 0));
+        ctx.fillStyle = core;
+        ctx.beginPath(); ctx.arc(0, 0, coreR, 0, Math.PI * 2); ctx.fill();
+
+        // Rotating halo ring
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.strokeStyle = lightenColor(baseColor, 35);
+        ctx.lineWidth = 2;
+        ctx.rotate(state.time * 0.8);
+        ctx.beginPath(); ctx.arc(0, 0, e.r * 0.95, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
+
+        ctx.restore();
+      }
+
       // HP bar background
-      const barWidth = e.r * 2;
+      const barWidth = e.r * 2.2;
       const barHeight = 4;
       const barY = -e.r - 12;
-      
       ctx.fillStyle = 'rgba(0,0,0,0.5)';
       roundRect(ctx, -barWidth/2, barY, barWidth, barHeight, 2);
       ctx.fill();
-      
-      // HP bar fill
+      // HP fill
       const hpWidth = Math.max(2, barWidth * hpPct);
-      const hpColor = hpPct > 0.6 ? '#5bff88' : 
-                     hpPct > 0.3 ? '#ffd700' : '#ff6e6e';
-      
+      const hpColor = hpPct > 0.6 ? '#5bff88' : hpPct > 0.3 ? '#ffd700' : '#ff6e6e';
       ctx.fillStyle = hpColor;
       roundRect(ctx, -barWidth/2, barY, hpWidth, barHeight, 2);
       ctx.fill();
-      
-      // HP bar border
+      // Border
       ctx.strokeStyle = 'rgba(0,0,0,0.3)';
       ctx.lineWidth = 1;
       roundRect(ctx, -barWidth/2, barY, barWidth, barHeight, 2);
       ctx.stroke();
-      
-      // Damage flash
+
+      // Damage flash overlay
       if (e.damageTime && state.time - e.damageTime < 0.1) {
-        ctx.fillStyle = 'rgba(255,255,255,0.4)';
-        roundRect(ctx, -size/2, -size/2, size, size, cornerRadius);
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        const s = e.r * 1.6;
+        roundRect(ctx, -s/2, -s/2, s, s, e.r * 0.35);
         ctx.fill();
       }
       
@@ -1361,6 +1659,33 @@
         ctx.closePath();
         ctx.fill();
         ctx.restore();
+      } else if (p.effect === 'chain') {
+        // Chain lightning between path points
+        if (p.path && p.path.length > 1) {
+          const alpha = Math.max(0, p.life / p.maxLife);
+          for (let s = 0; s < 2; s++) { // draw twice for glow
+            ctx.save();
+            ctx.globalAlpha = (s === 0 ? 0.8 : 0.3) * alpha;
+            ctx.strokeStyle = s === 0 ? p.color : 'white';
+            ctx.lineWidth = s === 0 ? 2.5 : 1.2;
+            ctx.beginPath();
+            for (let i = 0; i < p.path.length - 1; i++) {
+              const a = p.path[i];
+              const b = p.path[i + 1];
+              // jittered polyline
+              const segs = 5;
+              ctx.moveTo(a.x, a.y);
+              for (let j = 1; j <= segs; j++) {
+                const t = j / segs;
+                const x = a.x + (b.x - a.x) * t + (Math.random() - 0.5) * 6;
+                const y = a.y + (b.y - a.y) * t + (Math.random() - 0.5) * 6;
+                ctx.lineTo(x, y);
+              }
+            }
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
       } else if (p.effect === 'orb') {
         // Energy orb effect
         ctx.save();
