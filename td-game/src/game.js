@@ -174,6 +174,25 @@
     };
   }
 
+  // Special tank enemy (for wave 5)
+  function makeTankEnemy() {
+    const startX = PATH_POINTS[0].x * TILE + TILE * 0.5;
+    const startY = PATH_POINTS[0].y * TILE + TILE * 0.5;
+    const hp = 600; // very high HP for a mini-boss feel
+    return {
+      x: startX,
+      y: startY,
+      r: 16,                 // bigger body
+      speed: 36,             // slower
+      hp,
+      maxHp: hp,
+      pathIndex: 1,
+      reachedEnd: false,
+      reward: 50,
+      type: 'tank',          // mark type for future visuals if desired
+    };
+  }
+
   // Utility
   function dist(a, b) {
     const dx = a.x - b.x; const dy = a.y - b.y; return Math.hypot(dx, dy);
@@ -291,10 +310,18 @@
 
     const count = 8 + Math.floor(state.wave * 1.5);
     state.upcoming = Array.from({ length: count }, () => makeEnemy(hpMul, spdMul));
+
+    // Insert a special tank enemy in wave 5
+    if (state.wave === 5) {
+      // Put the tank near the middle of the wave
+      const mid = Math.floor(state.upcoming.length / 2);
+      state.upcoming.splice(mid, 0, makeTankEnemy());
+    }
+
     state.waveSpawning = true;
     state.spawnTimer = 0;
     updateHUD();
-  }
+}
 
   function spawnEnemyTick(dt) {
     if (!state.waveSpawning) return;
