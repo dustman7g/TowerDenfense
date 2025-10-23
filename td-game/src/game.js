@@ -58,6 +58,24 @@
   const HEIGHT = canvas.height;
   const TILE = 30; // grid size
   
+  // Starfield for background
+  const stars = [];
+  function initStars() {
+    stars.length = 0;
+    const count = 120; // number of stars
+    for (let i = 0; i < count; i++) {
+      stars.push({
+        x: Math.random() * WIDTH,
+        y: Math.random() * HEIGHT,
+        r: Math.random() * 1.6 + 0.4,
+        speed: 8 + Math.random() * 28, // parallax drift
+        phase: Math.random() * Math.PI * 2,
+        hue: 200 + Math.random() * 80
+      });
+    }
+  }
+  initStars();
+  
   // Visual effects
   const effects = {
     shake: { intensity: 0, duration: 0 },
@@ -156,6 +174,19 @@
       auraColor: 'rgba(124, 255, 178, 0.08)',
       shootEffect: 'tracer',
       size: 12
+    },
+    missile: {
+      cost: 120,
+      range: 180,
+      rof: 1.8,
+      dmg: 30,
+      splash: 70,
+      bulletSpeed: 220,
+      color: '#ff9f43',
+      bulletColor: '#ffd18a',
+      auraColor: 'rgba(255, 159, 67, 0.10)',
+      shootEffect: 'missile',
+      size: 14
     },
   };
 
@@ -471,6 +502,24 @@
         if (target) {
           t.cooldown = def.rof;
           const angle = Math.atan2(target.y - t.y, target.x - t.x);
+          // Record last aim and muzzle time for visuals (spin + flash)
+          t.lastAngle = angle;
+          t.muzzleTime = state.time;
+          
+          // Eject a shell casing particle for machinegun
+          if (t.type === 'machinegun') {
+            const shellAngle = angle + Math.PI + (Math.random() * 0.6 - 0.3);
+            const speed = 120 + Math.random() * 80;
+            createParticle(
+              t.x + Math.cos(angle) * 12,
+              t.y + Math.sin(angle) * 12,
+              '#d6c271',
+              2,
+              speed,
+              0.5,
+              600 // gravity to drop down quickly
+            );
+          }
           state.projectiles.push({
             x: t.x, y: t.y,
             vx: Math.cos(angle) * def.bulletSpeed,
@@ -478,13 +527,14 @@
             dmg: def.dmg,
             color: def.bulletColor || def.color,
             splash: def.splash || 0,
-            life: def.shootEffect === 'beam' ? 0.12 : 1.2,
-            maxLife: def.shootEffect === 'beam' ? 0.12 : 1.2,
+            life: def.shootEffect === 'beam' ? 0.12 : (def.shootEffect === 'missile' ? 3.0 : 1.2),
+            maxLife: def.shootEffect === 'beam' ? 0.12 : (def.shootEffect === 'missile' ? 3.0 : 1.2),
             type: t.type,
             effect: def.shootEffect,
             // Beam/projectile endpoint snapshot for beam rendering
             tx: target.x,
             ty: target.y,
+            turnRate: def.shootEffect === 'missile' ? 4.0 : 0, // rad/sec
           });
         }
       }
@@ -494,6 +544,38 @@
     for (let i = state.projectiles.length - 1; i >= 0; i--) {
       const p = state.projectiles[i];
       
+      // Homing behavior for missiles
+      if (p.effect === 'missile') {
+        // Acquire nearest target
+        let target = null; let best = Infinity;
+        for (const e of state.enemies) {
+          const d = dist(p, e);
+          if (d < best) { best = d; target = e; }
+        }
+        // Steer towards target
+        if (target) {
+          const desired = Math.atan2(target.y - p.y, target.x - p.x);
+          const current = Math.atan2(p.vy, p.vx);
+          let delta = desired - current;
+          while (delta > Math.PI) delta -= Math.PI * 2;
+          while (delta < -Math.PI) delta += Math.PI * 2;
+          const maxTurn = (p.turnRate || 4.0) * dt;
+          const turn = Math.max(-maxTurn, Math.min(maxTurn, delta));
+          const newAngle = current + turn;
+          const speed = Math.hypot(p.vx, p.vy) || 1;
+          const targetSpeed = Math.max(speed, 180); // don't slow down too much
+          const accel = 80; // gently accelerate
+          const newSpeed = Math.min(targetSpeed + accel * dt, 320);
+          p.vx = Math.cos(newAngle) * newSpeed;
+          p.vy = Math.sin(newAngle) * newSpeed;
+
+          // Smoke trail
+          if (Math.random() < 0.6) {
+            createParticle(p.x, p.y, 'rgba(255,255,255,0.4)', 2.2, 20, 0.35, 0);
+          }
+        }
+      }
+
       // Update position
       p.x += p.vx * dt;
       p.y += p.vy * dt;
@@ -814,18 +896,47 @@
   }
 
   function drawBackground() {
-    // Gradient background
+    // Deep space gradient
     const bgGradient = ctx.createLinearGradient(0, 0, WIDTH, HEIGHT);
-    bgGradient.addColorStop(0, '#0a0f1e');
-    bgGradient.addColorStop(1, '#141a35');
+    bgGradient.addColorStop(0, '#060914');
+    bgGradient.addColorStop(1, '#101634');
     ctx.fillStyle = bgGradient;
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
-    
-    // Grid pattern
+
+    // Layered nebulas
+    const nebula = (cx, cy, inner, outer, colorA, colorB, alpha=0.35) => {
+      const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+      g.addColorStop(0, colorA);
+      g.addColorStop(1, colorB);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cx, cy, outer, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    };
+
+    nebula(WIDTH*0.25, HEIGHT*0.3, 10, 220, 'rgba(88,126,255,0.9)', 'rgba(88,126,255,0)');
+    nebula(WIDTH*0.75, HEIGHT*0.7, 10, 260, 'rgba(255,120,190,0.9)', 'rgba(255,120,190,0)');
+
+    // Twinkling parallax starfield
     ctx.save();
-    ctx.strokeStyle = 'rgba(108, 122, 255, 0.05)';
+    for (const s of stars) {
+      const drift = (state.time * s.speed) % WIDTH;
+      let x = s.x - drift; if (x < 0) x += WIDTH;
+      const twinkle = 0.6 + 0.4 * Math.sin(state.time * 2.2 + s.phase);
+      ctx.fillStyle = `hsla(${s.hue}, 80%, 75%, ${0.35 + twinkle * 0.65})`;
+      ctx.beginPath();
+      ctx.arc(x, s.y, s.r * (0.7 + twinkle*0.3), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Subtle blueprint grid
+    ctx.save();
+    ctx.strokeStyle = 'rgba(108, 122, 255, 0.06)';
     ctx.lineWidth = 1;
-    const gridSize = 40;
+    const gridSize = 60;
     for (let x = 0; x < WIDTH; x += gridSize) {
       ctx.beginPath();
       ctx.moveTo(x + 0.5, 0);
@@ -839,14 +950,14 @@
       ctx.stroke();
     }
     ctx.restore();
-    
+
     // Vignette
     const vignette = ctx.createRadialGradient(
       WIDTH/2, HEIGHT/2, 0,
-      WIDTH/2, HEIGHT/2, Math.max(WIDTH, HEIGHT)/2
+      WIDTH/2, HEIGHT/2, Math.max(WIDTH, HEIGHT)/1.2
     );
     vignette.addColorStop(0, 'rgba(0,0,0,0)');
-    vignette.addColorStop(0.7, 'rgba(0,0,0,0.8)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.75)');
     ctx.fillStyle = vignette;
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
   }
@@ -976,6 +1087,57 @@
           ctx.beginPath();
           ctx.arc(x, y, def.size * 0.5, 0, Math.PI * 2);
           ctx.fill();
+        }
+        ctx.restore();
+      } else if (t.type === 'machinegun') {
+        // Machine gun tower base
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Spinning barrel assembly
+        const aim = (t.lastAngle ?? 0);
+        const spinSpeed = 18; // rad/s
+        const firingBoost = (state.time - (t.muzzleTime || 0) < def.rof + 0.05) ? 1.5 : 1.0;
+        const spin = state.time * spinSpeed * firingBoost;
+        ctx.save();
+        ctx.rotate(aim + spin * 0.1);
+        ctx.fillStyle = '#2c354f';
+        ctx.strokeStyle = lightenColor(def.color, 30);
+        ctx.lineWidth = 1.5;
+        // Draw 4 barrels
+        for (let i = 0; i < 4; i++) {
+          const a = (i / 4) * Math.PI * 2;
+          ctx.save();
+          ctx.rotate(a);
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(def.size * 0.2, -2, def.size * 1.0, 4, 2)
+                        : (ctx.rect(def.size * 0.2, -2, def.size * 1.0, 4));
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+        }
+        // Central hub
+        ctx.fillStyle = lightenColor(def.color, 20);
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Muzzle flash when just fired
+        const flashAge = state.time - (t.muzzleTime || -999);
+        if (flashAge >= 0 && flashAge < 0.08) {
+          const flashAlpha = 1 - (flashAge / 0.08);
+          ctx.save();
+          ctx.rotate(aim);
+          const grad = ctx.createRadialGradient(def.size * 1.6, 0, 0, def.size * 1.6, 0, def.size * 0.9);
+          grad.addColorStop(0, 'rgba(255,255,200,' + (0.8 * flashAlpha) + ')');
+          grad.addColorStop(1, 'rgba(255,255,200,0)');
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(def.size * 1.6, 0, def.size * 0.9, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
         }
         ctx.restore();
       }
@@ -1124,6 +1286,46 @@
         
         ctx.restore();
         
+      } else if (p.effect === 'missile') {
+        // Missile body with flame
+        const angle = Math.atan2(p.vy, p.vx);
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(angle);
+        // Glow
+        const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, 10);
+        glow.addColorStop(0, p.color);
+        glow.addColorStop(1, 'transparent');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(0, 0, 10, 0, Math.PI * 2);
+        ctx.fill();
+        // Body
+        ctx.fillStyle = '#cccccc';
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(-6, -3, 12, 6, 3) : ctx.rect(-6, -3, 12, 6);
+        ctx.fill();
+        ctx.stroke();
+        // Nose tip
+        ctx.fillStyle = '#ffd18a';
+        ctx.beginPath();
+        ctx.arc(6, 0, 2, 0, Math.PI * 2);
+        ctx.fill();
+        // Flame
+        const f = 1 + Math.sin(state.time * 40) * 0.2;
+        const grad = ctx.createLinearGradient(-12, 0, -2, 0);
+        grad.addColorStop(0, 'rgba(255,180,80,0)');
+        grad.addColorStop(1, 'rgba(255,140,50,0.9)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(-12 * f, 0);
+        ctx.lineTo(-2, -2);
+        ctx.lineTo(-2, 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
       } else if (p.effect === 'orb') {
         // Energy orb effect
         ctx.save();
@@ -1160,6 +1362,29 @@
         
         ctx.restore();
         
+      } else if (p.effect === 'tracer') {
+        // Fast tracer bullet (streak line)
+        const angle = Math.atan2(p.vy, p.vx);
+        const len = 14;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(angle);
+        const grad = ctx.createLinearGradient(-len, 0, 0, 0);
+        grad.addColorStop(0, 'rgba(255,255,255,0)');
+        grad.addColorStop(1, p.color);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.9;
+        ctx.beginPath();
+        ctx.moveTo(-len, 0);
+        ctx.lineTo(0, 0);
+        ctx.stroke();
+        // small core dot
+        ctx.fillStyle = 'white';
+        ctx.beginPath();
+        ctx.arc(0, 0, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
       } else {
         // Default projectile
         ctx.save();
