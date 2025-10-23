@@ -57,6 +57,8 @@
   const WIDTH = canvas.width;
   const HEIGHT = canvas.height;
   const TILE = 30; // grid size
+  // Path half-width in tiles (0 = 1-tile wide center line, 1 = 3 tiles wide, etc.)
+  const PATH_HALF_WIDTH_TILES = 1;
   
   // Starfield for background
   const stars = [];
@@ -204,6 +206,21 @@
       reward: 8,
     };
   }
+  // Faster, lighter runner enemy
+  function makeFastEnemy(hpMul = 1, spdMul = 1) {
+    return {
+      x: PATH_POINTS[0].x * TILE + TILE * 0.5,
+      y: PATH_POINTS[0].y * TILE + TILE * 0.5,
+      r: 8,
+      speed: 120 * spdMul,
+      hp: Math.floor(25 * hpMul),
+      maxHp: Math.floor(25 * hpMul),
+      pathIndex: 1,
+      reachedEnd: false,
+      reward: 6,
+      type: 'fast',
+    };
+  }
 
   // Special tank enemy (for wave 5)
   function makeTankEnemy() {
@@ -243,12 +260,20 @@
         const x = a.x;
         const y0 = Math.min(a.y, b.y);
         const y1 = Math.max(a.y, b.y);
-        for (let y = y0; y <= y1; y++) pathCells.add(key(x, y));
+        for (let y = y0; y <= y1; y++) {
+          for (let dx = -PATH_HALF_WIDTH_TILES; dx <= PATH_HALF_WIDTH_TILES; dx++) {
+            pathCells.add(key(x + dx, y));
+          }
+        }
       } else if (a.y === b.y) {
         const y = a.y;
         const x0 = Math.min(a.x, b.x);
         const x1 = Math.max(a.x, b.x);
-        for (let x = x0; x <= x1; x++) pathCells.add(key(x, y));
+        for (let x = x0; x <= x1; x++) {
+          for (let dy = -PATH_HALF_WIDTH_TILES; dy <= PATH_HALF_WIDTH_TILES; dy++) {
+            pathCells.add(key(x, y + dy));
+          }
+        }
       }
     }
   }
@@ -341,6 +366,12 @@
 
     const count = 8 + Math.floor(state.wave * 1.5);
     state.upcoming = Array.from({ length: count }, () => makeEnemy(hpMul, spdMul));
+    // Add some fast runners to spice up the wave
+    const fastCount = Math.max(1, Math.floor(count * 0.2));
+    for (let i = 0; i < fastCount; i++) {
+      const idx = Math.floor(((i + 1) / (fastCount + 1)) * state.upcoming.length);
+      state.upcoming.splice(idx, 0, makeFastEnemy(hpMul, spdMul * 1.05));
+    }
 
     // Insert a special tank enemy in wave 5
     if (state.wave === 5) {
@@ -741,10 +772,11 @@
 
   function drawPath() {
     ctx.save();
+    const baseWidth = TILE * (1 + PATH_HALF_WIDTH_TILES * 2);
     
     // Draw path shadow
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
-    ctx.lineWidth = TILE + 4;
+    ctx.lineWidth = baseWidth + 4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     
@@ -763,7 +795,7 @@
     pathGradient.addColorStop(1, '#3f61c9');
     
     ctx.strokeStyle = pathGradient;
-    ctx.lineWidth = TILE;
+    ctx.lineWidth = baseWidth;
     
     ctx.beginPath();
     for (let i = 0; i < PATH_POINTS.length; i++) {
@@ -780,7 +812,7 @@
     highlightGradient.addColorStop(1, '#5a8bff');
     
     ctx.strokeStyle = highlightGradient;
-    ctx.lineWidth = TILE - 8;
+    ctx.lineWidth = Math.max(4, baseWidth - 8);
     ctx.stroke();
     
     // Add subtle noise/texture to path
@@ -807,7 +839,7 @@
     
     // Apply the pattern to the path
     ctx.strokeStyle = pattern;
-    ctx.lineWidth = TILE - 12;
+    ctx.lineWidth = Math.max(2, baseWidth - 12);
     ctx.stroke();
     
     // Draw path border
@@ -823,7 +855,7 @@
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
     ctx.strokeStyle = 'transparent';
-    ctx.lineWidth = TILE - 4;
+    ctx.lineWidth = Math.max(2, baseWidth - 4);
     ctx.stroke();
     
     ctx.restore();
@@ -1177,7 +1209,10 @@
         0, -e.r/2, 0,
         0, 0, e.r
       );
-      const baseColor = isDamaged ? '#ff4a4a' : '#ff6e6e';
+      // Differentiate special enemy types
+      let baseColor = isDamaged ? '#ff4a4a' : '#ff6e6e';
+      if (e.type === 'fast') baseColor = isDamaged ? '#5ad4ff' : '#6ee7ff';
+      if (e.type === 'tank') baseColor = isDamaged ? '#ff9b4a' : '#ffb36e';
       gradient.addColorStop(0, lightenColor(baseColor, 30));
       gradient.addColorStop(1, darkenColor(baseColor, 20));
       
