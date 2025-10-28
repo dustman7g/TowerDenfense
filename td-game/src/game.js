@@ -1439,6 +1439,68 @@
         ctx.lineWidth = 1.6;
         ctx.stroke();
         ctx.restore();
+      } else if (t.type === 'archmage') {
+        const s = def.size;
+        const bob = Math.sin(state.time * 1.6 + (t.x + t.y) * 0.01) * 1.5;
+        ctx.translate(0, -bob);
+        // Grass pad
+        ctx.save();
+        ctx.fillStyle = 'rgba(90,161,90,0.25)';
+        ctx.beginPath();
+        ctx.ellipse(0, s * 0.9, s * 1.1, s * 0.35, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        // Stone tower body
+        const stoneA = '#b9ab8d';
+        const stoneB = '#8e8268';
+        const bodyGrad = ctx.createLinearGradient(-s*0.6, -s*0.6, s*0.6, s*0.6);
+        bodyGrad.addColorStop(0, stoneA);
+        bodyGrad.addColorStop(1, stoneB);
+        ctx.fillStyle = bodyGrad;
+        ctx.strokeStyle = darkenColor(stoneB, 30);
+        ctx.lineWidth = 2;
+        roundRect(ctx, -s*0.6, -s*1.0, s*1.2, s*1.8, 6);
+        ctx.fill();
+        ctx.stroke();
+        // Arched door
+        ctx.fillStyle = '#6b3d26';
+        ctx.beginPath();
+        const dw = s*0.4, dh = s*0.65;
+        ctx.moveTo(-dw*0.5, dh*0.2);
+        ctx.lineTo(-dw*0.5, 0);
+        ctx.lineTo(dw*0.5, 0);
+        ctx.lineTo(dw*0.5, dh*0.2);
+        ctx.arc(0, dh*0.2, dw*0.5, 0, Math.PI, true);
+        ctx.closePath();
+        ctx.save(); ctx.translate(0, -s*0.2); ctx.fill(); ctx.restore();
+        // Roof (blue cone)
+        const roofTop = -s*1.15;
+        ctx.save();
+        ctx.translate(0, -s*1.0);
+        const roofGrad = ctx.createLinearGradient(-s, -s, s, s);
+        roofGrad.addColorStop(0, '#4c6bb5');
+        roofGrad.addColorStop(1, '#2e4886');
+        ctx.fillStyle = roofGrad;
+        ctx.strokeStyle = '#1f2f5c';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, -s*0.9);
+        ctx.lineTo(-s*0.9, 0);
+        ctx.lineTo(s*0.9, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+        // Roof rim
+        ctx.fillStyle = '#1f2f5c';
+        ctx.beginPath();
+        ctx.ellipse(0, -s*0.95, s*0.9, s*0.18, 0, 0, Math.PI*2);
+        ctx.fill();
+        // Finial
+        ctx.fillStyle = '#ffd36e';
+        ctx.beginPath();
+        ctx.arc(0, roofTop - s*0.1, 2.2, 0, Math.PI*2);
+        ctx.fill();
       } else if (t.type === 'machinegun') {
         // Machine gun tower base
         ctx.beginPath();
