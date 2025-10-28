@@ -215,6 +215,32 @@
       size: 14,
       chain: { bounces: 3, bounceRange: 160, falloff: 0.7 }
     },
+    firewizard: {
+      cost: 130,
+      range: 160,
+      rof: 1.1,
+      dmg: 14,
+      bulletSpeed: 0,
+      color: '#ff7a3d',
+      bulletColor: '#ffb36e',
+      auraColor: 'rgba(255, 122, 61, 0.12)',
+      shootEffect: 'chain',
+      size: 14,
+      chain: { bounces: 3, bounceRange: 160, falloff: 0.75 },
+      burn: { dps: 6, duration: 2.5 }
+    },
+    archmage: {
+      cost: 140,
+      range: 170,
+      rof: 1.0,
+      dmg: 18,
+      bulletSpeed: 360,
+      color: '#5aa1ff',
+      bulletColor: '#a7c9ff',
+      auraColor: 'rgba(90, 161, 255, 0.12)',
+      shootEffect: 'orb',
+      size: 16
+    },
   };
 
   // Enemy presets per wave escalation
@@ -570,6 +596,16 @@
       if (e.trail.length > 5) e.trail.pop();
     }
 
+    // Status effects (e.g., burn)
+    for (const e of state.enemies) {
+      if (e.burnTime && e.burnTime > 0 && e.hp > 0) {
+        const dps = e.burnDps || 0;
+        e.hp -= dps * dt;
+        e.damageTime = state.time;
+        e.burnTime = Math.max(0, e.burnTime - dt);
+      }
+    }
+
     // End reached processing
     for (let i = state.enemies.length - 1; i >= 0; i--) {
       const e = state.enemies[i];
@@ -615,9 +651,10 @@
               600 // gravity to drop down quickly
             );
           }
-          // Wizard chain lightning: instant chain damage + visual
-          if (t.type === 'wizard') {
-            const chainCfg = TowerTypes.wizard.chain;
+          // Wizard and Fire Wizard: instant chain damage + visual (fire wizard adds burn)
+          if (t.type === 'wizard' || t.type === 'firewizard') {
+            const chainCfg = def.chain || TowerTypes.wizard.chain;
+            const fireCfg = TowerTypes.firewizard;
             const points = [{ x: t.x, y: t.y }];
             const hitSet = new Set();
             let current = target;
@@ -630,6 +667,11 @@
               const dmg = def.dmg * mult;
               current.hp -= dmg;
               current.damageTime = state.time;
+              // Apply burn over time if Fire Wizard
+              if (t.type === 'firewizard' && fireCfg && fireCfg.burn) {
+                current.burnTime = Math.max(current.burnTime || 0, fireCfg.burn.duration);
+                current.burnDps = fireCfg.burn.dps;
+              }
               // find next nearest within bounce range
               let next = null; let bestD = Infinity;
               for (const e2 of state.enemies) {
@@ -1254,6 +1296,148 @@
           ctx.arc(x, y, def.size * 0.5, 0, Math.PI * 2);
           ctx.fill();
         }
+        ctx.restore();
+      } else if (t.type === 'wizard') {
+        const aim = (t.lastAngle ?? 0);
+        const bob = Math.sin(state.time * 2 + (t.x + t.y) * 0.01) * 2;
+        ctx.translate(0, -bob);
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.save();
+        ctx.globalAlpha = 0.6;
+        const g1 = ctx.createRadialGradient(0, 0, 0, 0, 0, def.size * 1.6);
+        g1.addColorStop(0, hexToRgba(def.color, 0.6));
+        g1.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g1;
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size * 1.6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        ctx.save();
+        ctx.rotate(state.time * 1.2);
+        ctx.strokeStyle = lightenColor(def.color, 35);
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.8;
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size * 1.1, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        ctx.save();
+        ctx.rotate(state.time * -1.6);
+        for (let i = 0; i < 3; i++) {
+          const a = (i / 3) * Math.PI * 2;
+          const x = Math.cos(a) * (def.size * 0.9);
+          const y = Math.sin(a) * (def.size * 0.9);
+          const rg = ctx.createRadialGradient(x, y, 0, x, y, def.size * 0.5);
+          rg.addColorStop(0, 'rgba(255,255,255,0.9)');
+          rg.addColorStop(1, hexToRgba(def.color, 0));
+          ctx.fillStyle = rg;
+          ctx.beginPath();
+          ctx.arc(x, y, def.size * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+        ctx.save();
+        ctx.rotate(aim);
+        ctx.translate(def.size * 0.6, 0);
+        ctx.fillStyle = '#2a2a4a';
+        ctx.beginPath();
+        ctx.moveTo(0, -def.size * 0.3);
+        ctx.lineTo(def.size * 0.7, 0);
+        ctx.lineTo(0, def.size * 0.3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+        ctx.save();
+        ctx.translate(0, -def.size * 1.2 - bob * 0.2);
+        ctx.rotate(state.time * 2.4);
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(0, -def.size * 0.4);
+        ctx.lineTo(def.size * 0.35, 0);
+        ctx.lineTo(0, def.size * 0.4);
+        ctx.lineTo(-def.size * 0.35, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = lightenColor(def.color, 40);
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+      } else if (t.type === 'firewizard') {
+        const aim = (t.lastAngle ?? 0);
+        const bob = Math.sin(state.time * 2.2 + (t.x + t.y) * 0.01) * 2.2;
+        ctx.translate(0, -bob);
+        // Base core
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        // Ember glow
+        ctx.save();
+        ctx.globalAlpha = 0.65;
+        const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, def.size * 1.7);
+        glow.addColorStop(0, hexToRgba(def.color, 0.7));
+        glow.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size * 1.7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        // Rotating flame ring
+        ctx.save();
+        ctx.rotate(state.time * 1.6);
+        ctx.strokeStyle = lightenColor(def.color, 25);
+        ctx.lineWidth = 2.2;
+        ctx.globalAlpha = 0.9;
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size * 1.15, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        // Orbiting embers
+        ctx.save();
+        ctx.rotate(state.time * -1.9);
+        for (let i = 0; i < 4; i++) {
+          const a = (i / 4) * Math.PI * 2;
+          const x = Math.cos(a) * (def.size * 0.95);
+          const y = Math.sin(a) * (def.size * 0.95);
+          const rg = ctx.createRadialGradient(x, y, 0, x, y, def.size * 0.45);
+          rg.addColorStop(0, 'rgba(255,240,200,0.95)');
+          rg.addColorStop(1, hexToRgba(def.color, 0));
+          ctx.fillStyle = rg;
+          ctx.beginPath();
+          ctx.arc(x, y, def.size * 0.45, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+        // Aiming flame wedge
+        ctx.save();
+        ctx.rotate(aim);
+        ctx.translate(def.size * 0.6, 0);
+        ctx.fillStyle = '#3a1e12';
+        ctx.beginPath();
+        ctx.moveTo(0, -def.size * 0.3);
+        ctx.lineTo(def.size * 0.7, 0);
+        ctx.lineTo(0, def.size * 0.3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+        // Floating flame crystal
+        ctx.save();
+        ctx.translate(0, -def.size * 1.15 - bob * 0.2);
+        ctx.rotate(state.time * 2.7);
+        ctx.fillStyle = '#fff3cf';
+        ctx.beginPath();
+        ctx.moveTo(0, -def.size * 0.42);
+        ctx.lineTo(def.size * 0.36, 0);
+        ctx.lineTo(0, def.size * 0.42);
+        ctx.lineTo(-def.size * 0.36, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = lightenColor(def.color, 35);
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
         ctx.restore();
       } else if (t.type === 'machinegun') {
         // Machine gun tower base
