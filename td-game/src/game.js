@@ -17,6 +17,49 @@
     });
   }
 
+  // Profile & High Score
+  function loadProfile() {
+    try {
+      const savedName = localStorage.getItem('td_name') || '';
+      const savedHS = parseInt(localStorage.getItem('td_highscore') || '0', 10) || 0;
+      state.name = savedName;
+      state.highScore = savedHS;
+      if (nameInput) nameInput.value = savedName;
+      updateHUD();
+      // Award Dad bonus if name is dad and bonus not yet granted
+      if (savedName && savedName.toLowerCase() === 'dad') {
+        const bonusKey = 'td_dad_bonus_given';
+        const already = localStorage.getItem(bonusKey) === '1';
+        if (!already) {
+          state.gold += 100000;
+          updateHUD();
+          localStorage.setItem(bonusKey, '1');
+          flashMsg('Welcome, Dad! Bonus +100000 gold');
+        }
+      }
+    } catch (_) { /* ignore storage errors */ }
+  }
+
+  function saveProfile() {
+    try {
+      localStorage.setItem('td_name', state.name);
+      localStorage.setItem('td_highscore', String(state.highScore));
+    } catch (_) { /* ignore storage errors */ }
+  }
+
+  function updateHighScoreIfNeeded() {
+    if (state.wave > state.highScore) {
+      state.highScore = state.wave;
+      saveProfile();
+      updateHUD();
+      flashMsg('New High Score: Wave ' + state.highScore);
+    }
+  }
+
+  
+
+  // (Call moved to after state initialization)
+
   // Targeting rules: which towers can hit which enemies
   function canTowerHit(towerType, enemy) {
     if (enemy.type === 'jet') {
@@ -64,6 +107,10 @@
   const startWaveBtn = document.getElementById('startWaveBtn');
   const msgEl = document.getElementById('message');
   const towerBtns = [...document.querySelectorAll('.tower-btn')];
+  const nukeBtn = document.getElementById('nukeBtn');
+  const nameInput = document.getElementById('nameInput');
+  const saveNameBtn = document.getElementById('saveNameBtn');
+  const highScoreEl = document.getElementById('highScore');
 
   // World config
   const WIDTH = canvas.width;
@@ -95,6 +142,8 @@
     shake: { intensity: 0, duration: 0 },
     flash: { alpha: 0, duration: 0 }
   };
+
+  // (Defer loadProfile until after UI/event setup)
   
   function triggerEffect(name, duration = 0.3, intensity = 1) {
     effects[name] = { intensity, duration, time: 0 };
@@ -130,7 +179,10 @@
     lives: 20,
     gold: 150,
     wave: 0,
+    name: '',
+    highScore: 0,
     placing: null, // {type: 'basic' | 'sniper' | 'splash'}
+    casting: null, // {type: 'nuke', radius, dmg}
     enemies: [],
     towers: [],
     projectiles: [],
@@ -214,6 +266,32 @@
       shootEffect: 'chain',
       size: 14,
       chain: { bounces: 3, bounceRange: 160, falloff: 0.7 }
+    },
+    firewizard: {
+      cost: 130,
+      range: 160,
+      rof: 1.1,
+      dmg: 14,
+      bulletSpeed: 0,
+      color: '#ff7a3d',
+      bulletColor: '#ffb36e',
+      auraColor: 'rgba(255, 122, 61, 0.12)',
+      shootEffect: 'chain',
+      size: 14,
+      chain: { bounces: 3, bounceRange: 160, falloff: 0.75 },
+      burn: { dps: 6, duration: 2.5 }
+    },
+    archmage: {
+      cost: 140,
+      range: 170,
+      rof: 1.0,
+      dmg: 18,
+      bulletSpeed: 360,
+      color: '#5aa1ff',
+      bulletColor: '#a7c9ff',
+      auraColor: 'rgba(90, 161, 255, 0.12)',
+      shootEffect: 'orb',
+      size: 16
     },
   };
 
@@ -339,6 +417,53 @@
   canvas.addEventListener('mouseenter', () => mouse.inside = true);
   canvas.addEventListener('mouseleave', () => mouse.inside = false);
   canvas.addEventListener('click', () => {
+    // Spell casting takes priority
+    if (state.casting && state.casting.type === 'nuke') {
+      const mx = mouse.x, my = mouse.y;
+      // Cast
+      const radius = state.casting.radius;
+      const dmg = state.casting.dmg;
+      // Apply damage with falloff
+      for (const e of state.enemies) {
+        const d = Math.hypot(e.x - mx, e.y - my);
+        if (d <= radius) {
+          const mult = 1 - Math.min(1, (d / radius) * 0.6);
+          e.hp -= dmg * mult;
+          e.damageTime = state.time;
+        }
+      }
+      // Big effects
+      triggerEffect('shake', 0.6, 2.0);
+      for (let i = 0; i < 60; i++) {
+        createParticle(
+          mx, my,
+          i % 2 ? 'rgba(255,230,120,0.9)' : 'rgba(255,160,80,0.9)',
+          2 + Math.random() * 3,
+          220 + Math.random() * 160,
+          0.6 + Math.random() * 0.5,
+          0
+        );
+      }
+      // Shockwave projectile for visual
+      state.projectiles.push({
+        x: mx, y: my,
+        vx: 0, vy: 0,
+        dmg: 0,
+        color: '#ffd36e',
+        splash: 0,
+        life: 0.75,
+        maxLife: 0.75,
+        type: 'nuke',
+        effect: 'nuke',
+        r0: 10,
+        r1: radius
+      });
+      // Spend and cleanup
+      state.gold -= 200;
+      updateHUD();
+      state.casting = null;
+      return;
+    }
     if (!state.placing) return;
     const { gx, gy } = worldToGrid(mouse.x, mouse.y);
     if (gx < 0 || gy < 0 || gx >= Math.floor(WIDTH / TILE) || gy >= Math.floor(HEIGHT / TILE)) return;
@@ -369,7 +494,40 @@
     });
   });
 
-  startWaveBtn.addEventListener('click', () => startWave());
+  if (startWaveBtn) {
+    startWaveBtn.addEventListener('click', () => startWave());
+  }
+  if (nukeBtn) {
+    nukeBtn.addEventListener('click', () => {
+      if (state.gold < 200) { flashMsg('Not enough gold for Nuke', 'error'); return; }
+      state.placing = null;
+      state.casting = { type: 'nuke', radius: 140, dmg: 320 };
+      flashMsg('Nuke ready: click on the map to cast!','warning');
+    });
+  }
+
+  if (saveNameBtn) {
+    saveNameBtn.addEventListener('click', () => {
+      const name = ((nameInput && nameInput.value) || '').trim();
+      state.name = name;
+      saveProfile();
+      if (name.toLowerCase() === 'dad') {
+        const bonusKey = 'td_dad_bonus_given';
+        const already = localStorage.getItem(bonusKey) === '1';
+        if (!already) {
+          state.gold += 100000;
+          updateHUD();
+          localStorage.setItem(bonusKey, '1');
+          flashMsg('Welcome, Dad! Bonus +100000 gold');
+        }
+      } else {
+        flashMsg('Name saved: ' + name);
+      }
+    });
+  }
+
+  // Load profile after listeners are attached
+  loadProfile();
 
   function flashMsg(text, type = 'info') {
     msgEl.textContent = text;
@@ -396,6 +554,7 @@
     livesEl.textContent = state.lives;
     goldEl.textContent = state.gold;
     waveEl.textContent = state.wave;
+    if (highScoreEl) highScoreEl.textContent = state.highScore;
   }
 
   // Wave logic
@@ -452,6 +611,7 @@
       state.gold += 25 + state.wave * 5;
       updateHUD();
       flashMsg('Wave cleared! +Gold');
+      updateHighScoreIfNeeded();
     }
   }
 
@@ -570,6 +730,16 @@
       if (e.trail.length > 5) e.trail.pop();
     }
 
+    // Status effects (e.g., burn)
+    for (const e of state.enemies) {
+      if (e.burnTime && e.burnTime > 0 && e.hp > 0) {
+        const dps = e.burnDps || 0;
+        e.hp -= dps * dt;
+        e.damageTime = state.time;
+        e.burnTime = Math.max(0, e.burnTime - dt);
+      }
+    }
+
     // End reached processing
     for (let i = state.enemies.length - 1; i >= 0; i--) {
       const e = state.enemies[i];
@@ -579,6 +749,7 @@
         updateHUD();
         if (state.lives <= 0) {
           flashMsg('Game Over');
+          updateHighScoreIfNeeded();
         }
       }
     }
@@ -615,9 +786,10 @@
               600 // gravity to drop down quickly
             );
           }
-          // Wizard chain lightning: instant chain damage + visual
-          if (t.type === 'wizard') {
-            const chainCfg = TowerTypes.wizard.chain;
+          // Wizard and Fire Wizard: instant chain damage + visual (fire wizard adds burn)
+          if (t.type === 'wizard' || t.type === 'firewizard') {
+            const chainCfg = def.chain || TowerTypes.wizard.chain;
+            const fireCfg = TowerTypes.firewizard;
             const points = [{ x: t.x, y: t.y }];
             const hitSet = new Set();
             let current = target;
@@ -630,6 +802,11 @@
               const dmg = def.dmg * mult;
               current.hp -= dmg;
               current.damageTime = state.time;
+              // Apply burn over time if Fire Wizard
+              if (t.type === 'firewizard' && fireCfg && fireCfg.burn) {
+                current.burnTime = Math.max(current.burnTime || 0, fireCfg.burn.duration);
+                current.burnDps = fireCfg.burn.dps;
+              }
               // find next nearest within bounce range
               let next = null; let bestD = Infinity;
               for (const e2 of state.enemies) {
@@ -1062,68 +1239,105 @@
   }
 
   function drawBackground() {
-    // Deep space gradient
-    const bgGradient = ctx.createLinearGradient(0, 0, WIDTH, HEIGHT);
-    bgGradient.addColorStop(0, '#060914');
-    bgGradient.addColorStop(1, '#101634');
-    ctx.fillStyle = bgGradient;
-    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    // Water + Sky scene
+    const horizonY = Math.floor(HEIGHT * 0.55);
 
-    // Layered nebulas
-    const nebula = (cx, cy, inner, outer, colorA, colorB, alpha=0.35) => {
-      const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
-      g.addColorStop(0, colorA);
-      g.addColorStop(1, colorB);
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = g;
+    // Sky gradient
+    const sky = ctx.createLinearGradient(0, 0, 0, horizonY);
+    sky.addColorStop(0, '#bfe8ff');    // near zenith
+    sky.addColorStop(1, '#78b7ff');    // near horizon
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, WIDTH, horizonY);
+
+    // Sun
+    const sunX = WIDTH * 0.78;
+    const sunY = horizonY * 0.55;
+    const sunR = 38;
+    const sunGlow = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunR * 3);
+    sunGlow.addColorStop(0, 'rgba(255, 245, 200, 0.75)');
+    sunGlow.addColorStop(1, 'rgba(255, 245, 200, 0)');
+    ctx.fillStyle = sunGlow;
+    ctx.beginPath(); ctx.arc(sunX, sunY, sunR * 3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff3b0';
+    ctx.beginPath(); ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2); ctx.fill();
+
+    // Parallax clouds
+    const drawCloud = (x, y, s, a) => {
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = 'white';
       ctx.beginPath();
-      ctx.arc(cx, cy, outer, 0, Math.PI * 2);
+      ctx.arc(x - s*0.6, y, s*0.6, 0, Math.PI*2);
+      ctx.arc(x,          y - s*0.25, s*0.8, 0, Math.PI*2);
+      ctx.arc(x + s*0.6,  y, s*0.6, 0, Math.PI*2);
       ctx.fill();
-      ctx.globalAlpha = 1;
+      ctx.restore();
     };
+    // Use existing stars array as seeded positions for lightweight parallax
+    for (let i = 0; i < stars.length; i++) {
+      const s = stars[i];
+      const row = (i % 2);
+      const speed = row === 0 ? 12 : 24;
+      const drift = (state.time * speed) % (WIDTH + 200);
+      let x = (s.x + (row === 0 ? drift : -drift));
+      if (x < -200) x += WIDTH + 200; if (x > WIDTH + 200) x -= WIDTH + 200;
+      const y = 40 + (s.y % (horizonY - 80));
+      const size = row === 0 ? 18 : 28;
+      const alpha = row === 0 ? 0.25 : 0.35;
+      drawCloud(x, y, size, alpha);
+    }
 
-    nebula(WIDTH*0.25, HEIGHT*0.3, 10, 220, 'rgba(88,126,255,0.9)', 'rgba(88,126,255,0)');
-    nebula(WIDTH*0.75, HEIGHT*0.7, 10, 260, 'rgba(255,120,190,0.9)', 'rgba(255,120,190,0)');
+    // Horizon glow band
+    const haze = ctx.createLinearGradient(0, horizonY - 40, 0, horizonY + 20);
+    haze.addColorStop(0, 'rgba(255,255,255,0.25)');
+    haze.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = haze;
+    ctx.fillRect(0, horizonY - 40, WIDTH, 60);
 
-    // Twinkling parallax starfield
+    // Ocean base
+    const ocean = ctx.createLinearGradient(0, horizonY, 0, HEIGHT);
+    ocean.addColorStop(0, '#2e7bd1');
+    ocean.addColorStop(1, '#0f4e91');
+    ctx.fillStyle = ocean;
+    ctx.fillRect(0, horizonY, WIDTH, HEIGHT - horizonY);
+
+    // Wave bands
     ctx.save();
-    for (const s of stars) {
-      const drift = (state.time * s.speed) % WIDTH;
-      let x = s.x - drift; if (x < 0) x += WIDTH;
-      const twinkle = 0.6 + 0.4 * Math.sin(state.time * 2.2 + s.phase);
-      ctx.fillStyle = `hsla(${s.hue}, 80%, 75%, ${0.35 + twinkle * 0.65})`;
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    for (let i = 0; i < 12; i++) {
+      const y = horizonY + i * 18;
+      const amp = Math.max(1, 8 - i * 0.5);
+      const freq = 0.02 + i * 0.002;
       ctx.beginPath();
-      ctx.arc(x, s.y, s.r * (0.7 + twinkle*0.3), 0, Math.PI * 2);
-      ctx.fill();
+      for (let x = 0; x <= WIDTH; x += 8) {
+        const off = Math.sin((x * freq) + state.time * (0.8 + i * 0.05)) * amp;
+        ctx.lineTo(x, y + off);
+      }
+      ctx.stroke();
     }
     ctx.restore();
 
-    // Subtle blueprint grid
+    // Sun reflection streaks
     ctx.save();
-    ctx.strokeStyle = 'rgba(108, 122, 255, 0.06)';
-    ctx.lineWidth = 1;
-    const gridSize = 60;
-    for (let x = 0; x < WIDTH; x += gridSize) {
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = 'rgba(255,245,200,0.9)';
+    for (let i = 0; i < 18; i++) {
+      const y = horizonY + i * 12 + Math.sin(state.time * 1.2 + i) * 2;
+      const half = Math.max(10, 120 - i * 6);
       ctx.beginPath();
-      ctx.moveTo(x + 0.5, 0);
-      ctx.lineTo(x + 0.5, HEIGHT);
-      ctx.stroke();
-    }
-    for (let y = 0; y < HEIGHT; y += gridSize) {
-      ctx.beginPath();
-      ctx.moveTo(0, y + 0.5);
-      ctx.lineTo(WIDTH, y + 0.5);
+      ctx.moveTo(sunX - half, y);
+      ctx.lineTo(sunX + half, y);
       ctx.stroke();
     }
     ctx.restore();
 
-    // Vignette
+    // Soft vignette to frame
     const vignette = ctx.createRadialGradient(
       WIDTH/2, HEIGHT/2, 0,
       WIDTH/2, HEIGHT/2, Math.max(WIDTH, HEIGHT)/1.2
     );
     vignette.addColorStop(0, 'rgba(0,0,0,0)');
-    vignette.addColorStop(1, 'rgba(0,0,0,0.75)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.45)');
     ctx.fillStyle = vignette;
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
   }
@@ -1141,6 +1355,19 @@
     drawBackground();
     drawPath();
     drawGrid();
+    // Nuke targeting preview
+    if (state.casting && state.casting.type === 'nuke' && mouse.inside) {
+      const r = state.casting.radius;
+      ctx.save();
+      ctx.globalAlpha = 0.2;
+      ctx.fillStyle = 'rgba(255,120,80,0.3)';
+      ctx.beginPath(); ctx.arc(mouse.x, mouse.y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = 'rgba(255,200,120,0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(mouse.x, mouse.y, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    }
     
     // Draw range indicators under towers
     for (const t of state.towers) {
@@ -1255,6 +1482,210 @@
           ctx.fill();
         }
         ctx.restore();
+      } else if (t.type === 'wizard') {
+        const aim = (t.lastAngle ?? 0);
+        const bob = Math.sin(state.time * 2 + (t.x + t.y) * 0.01) * 2;
+        ctx.translate(0, -bob);
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.save();
+        ctx.globalAlpha = 0.6;
+        const g1 = ctx.createRadialGradient(0, 0, 0, 0, 0, def.size * 1.6);
+        g1.addColorStop(0, hexToRgba(def.color, 0.6));
+        g1.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g1;
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size * 1.6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        ctx.save();
+        ctx.rotate(state.time * 1.2);
+        ctx.strokeStyle = lightenColor(def.color, 35);
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.8;
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size * 1.1, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        ctx.save();
+        ctx.rotate(state.time * -1.6);
+        for (let i = 0; i < 3; i++) {
+          const a = (i / 3) * Math.PI * 2;
+          const x = Math.cos(a) * (def.size * 0.9);
+          const y = Math.sin(a) * (def.size * 0.9);
+          const rg = ctx.createRadialGradient(x, y, 0, x, y, def.size * 0.5);
+          rg.addColorStop(0, 'rgba(255,255,255,0.9)');
+          rg.addColorStop(1, hexToRgba(def.color, 0));
+          ctx.fillStyle = rg;
+          ctx.beginPath();
+          ctx.arc(x, y, def.size * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+        ctx.save();
+        ctx.rotate(aim);
+        ctx.translate(def.size * 0.6, 0);
+        ctx.fillStyle = '#2a2a4a';
+        ctx.beginPath();
+        ctx.moveTo(0, -def.size * 0.3);
+        ctx.lineTo(def.size * 0.7, 0);
+        ctx.lineTo(0, def.size * 0.3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+        ctx.save();
+        ctx.translate(0, -def.size * 1.2 - bob * 0.2);
+        ctx.rotate(state.time * 2.4);
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(0, -def.size * 0.4);
+        ctx.lineTo(def.size * 0.35, 0);
+        ctx.lineTo(0, def.size * 0.4);
+        ctx.lineTo(-def.size * 0.35, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = lightenColor(def.color, 40);
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+      } else if (t.type === 'firewizard') {
+        const aim = (t.lastAngle ?? 0);
+        const bob = Math.sin(state.time * 2.2 + (t.x + t.y) * 0.01) * 2.2;
+        ctx.translate(0, -bob);
+        // Base core
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        // Ember glow
+        ctx.save();
+        ctx.globalAlpha = 0.65;
+        const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, def.size * 1.7);
+        glow.addColorStop(0, hexToRgba(def.color, 0.7));
+        glow.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size * 1.7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        // Rotating flame ring
+        ctx.save();
+        ctx.rotate(state.time * 1.6);
+        ctx.strokeStyle = lightenColor(def.color, 25);
+        ctx.lineWidth = 2.2;
+        ctx.globalAlpha = 0.9;
+        ctx.beginPath();
+        ctx.arc(0, 0, def.size * 1.15, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        // Orbiting embers
+        ctx.save();
+        ctx.rotate(state.time * -1.9);
+        for (let i = 0; i < 4; i++) {
+          const a = (i / 4) * Math.PI * 2;
+          const x = Math.cos(a) * (def.size * 0.95);
+          const y = Math.sin(a) * (def.size * 0.95);
+          const rg = ctx.createRadialGradient(x, y, 0, x, y, def.size * 0.45);
+          rg.addColorStop(0, 'rgba(255,240,200,0.95)');
+          rg.addColorStop(1, hexToRgba(def.color, 0));
+          ctx.fillStyle = rg;
+          ctx.beginPath();
+          ctx.arc(x, y, def.size * 0.45, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+        // Aiming flame wedge
+        ctx.save();
+        ctx.rotate(aim);
+        ctx.translate(def.size * 0.6, 0);
+        ctx.fillStyle = '#3a1e12';
+        ctx.beginPath();
+        ctx.moveTo(0, -def.size * 0.3);
+        ctx.lineTo(def.size * 0.7, 0);
+        ctx.lineTo(0, def.size * 0.3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+        // Floating flame crystal
+        ctx.save();
+        ctx.translate(0, -def.size * 1.15 - bob * 0.2);
+        ctx.rotate(state.time * 2.7);
+        ctx.fillStyle = '#fff3cf';
+        ctx.beginPath();
+        ctx.moveTo(0, -def.size * 0.42);
+        ctx.lineTo(def.size * 0.36, 0);
+        ctx.lineTo(0, def.size * 0.42);
+        ctx.lineTo(-def.size * 0.36, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = lightenColor(def.color, 35);
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        ctx.restore();
+      } else if (t.type === 'archmage') {
+        const s = def.size;
+        const bob = Math.sin(state.time * 1.6 + (t.x + t.y) * 0.01) * 1.5;
+        ctx.translate(0, -bob);
+        // Grass pad
+        ctx.save();
+        ctx.fillStyle = 'rgba(90,161,90,0.25)';
+        ctx.beginPath();
+        ctx.ellipse(0, s * 0.9, s * 1.1, s * 0.35, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        // Stone tower body
+        const stoneA = '#b9ab8d';
+        const stoneB = '#8e8268';
+        const bodyGrad = ctx.createLinearGradient(-s*0.6, -s*0.6, s*0.6, s*0.6);
+        bodyGrad.addColorStop(0, stoneA);
+        bodyGrad.addColorStop(1, stoneB);
+        ctx.fillStyle = bodyGrad;
+        ctx.strokeStyle = darkenColor(stoneB, 30);
+        ctx.lineWidth = 2;
+        roundRect(ctx, -s*0.6, -s*1.0, s*1.2, s*1.8, 6);
+        ctx.fill();
+        ctx.stroke();
+        // Arched door
+        ctx.fillStyle = '#6b3d26';
+        ctx.beginPath();
+        const dw = s*0.4, dh = s*0.65;
+        ctx.moveTo(-dw*0.5, dh*0.2);
+        ctx.lineTo(-dw*0.5, 0);
+        ctx.lineTo(dw*0.5, 0);
+        ctx.lineTo(dw*0.5, dh*0.2);
+        ctx.arc(0, dh*0.2, dw*0.5, 0, Math.PI, true);
+        ctx.closePath();
+        ctx.save(); ctx.translate(0, -s*0.2); ctx.fill(); ctx.restore();
+        // Roof (blue cone)
+        const roofTop = -s*1.15;
+        ctx.save();
+        ctx.translate(0, -s*1.0);
+        const roofGrad = ctx.createLinearGradient(-s, -s, s, s);
+        roofGrad.addColorStop(0, '#4c6bb5');
+        roofGrad.addColorStop(1, '#2e4886');
+        ctx.fillStyle = roofGrad;
+        ctx.strokeStyle = '#1f2f5c';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, -s*0.9);
+        ctx.lineTo(-s*0.9, 0);
+        ctx.lineTo(s*0.9, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+        // Roof rim
+        ctx.fillStyle = '#1f2f5c';
+        ctx.beginPath();
+        ctx.ellipse(0, -s*0.95, s*0.9, s*0.18, 0, 0, Math.PI*2);
+        ctx.fill();
+        // Finial
+        ctx.fillStyle = '#ffd36e';
+        ctx.beginPath();
+        ctx.arc(0, roofTop - s*0.1, 2.2, 0, Math.PI*2);
+        ctx.fill();
       } else if (t.type === 'machinegun') {
         // Machine gun tower base
         ctx.beginPath();
@@ -1746,6 +2177,23 @@
         ctx.beginPath();
         ctx.arc(0, 0, 1.5, 0, Math.PI * 2);
         ctx.fill();
+        ctx.restore();
+      } else if (p.effect === 'nuke') {
+        // Expanding shockwave ring
+        const t = 1 - (p.life / p.maxLife);
+        const r = p.r0 + (p.r1 - p.r0) * t;
+        ctx.save();
+        // Heat haze fill
+        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+        g.addColorStop(0, 'rgba(255,230,150,0.35)');
+        g.addColorStop(1, 'rgba(255,230,150,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+        // Bright ring
+        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = p.color || '#ffd36e';
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.stroke();
         ctx.restore();
       } else {
         // Default projectile
